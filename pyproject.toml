@@ -32,9 +32,11 @@ dependencies = [
 [project.optional-dependencies]
 pdf = ["PyMuPDF>=1.23.0"]
 analyze = ["python-pptx>=0.6.21"]
+schema = ["jsonschema>=4.17.0"]
 all = [
     "PyMuPDF>=1.23.0",
     "python-pptx>=0.6.21",
+    "jsonschema>=4.17.0",
 ]
 dev = [
     "pytest>=7.0.0",
@@ -47,6 +49,7 @@ dev = [
 pptx-migrate = "presentation_toolkit.cli:pptx_migrate"
 pptx-analyze = "presentation_toolkit.cli:pptx_analyze"
 pptx-extract = "presentation_toolkit.cli:pptx_extract"
+pptx-diagnose = "presentation_toolkit.cli:pptx_diagnose"
 presentation-toolkit = "presentation_toolkit.cli:main"
 
 [project.urls]

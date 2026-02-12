@@ -61,6 +61,10 @@ def detect_content_type(slide: Dict[str, Any], config: BrandConfig) -> str:
     Returns:
         Content type string
     """
+    # Early return if pre-classified from ContentDocument
+    if '_content_type' in slide:
+        return slide['_content_type']
+
     title = slide.get('title', '').strip()
     body = slide.get('body', '').strip()
     combined = f"{title}\n{body}".lower()
@@ -973,6 +977,72 @@ def replace_text_in_slide(
 
 
 # ============================================================
+# FALLBACK SLIDE POPULATION (COOKBOOK)
+# ============================================================
+
+def populate_slide_with_fallback(
+    slide_path: Path,
+    new_title: str,
+    new_body: str,
+    title_font_size: int = 2400,
+    body_font_size: int = 1400,
+    category: str = "",
+    use_cookbook: bool = False,
+) -> etree._ElementTree:
+    """Replace text in slide, falling back to cookbook recipe if placeholders are missing.
+
+    Tries the standard placeholder-based replacement first. If that fails
+    (no title or body placeholder found), falls back to the cookbook recipe
+    for the given category to add absolutely-positioned text boxes.
+
+    Args:
+        slide_path: Path to the slide XML
+        new_title: Title text
+        new_body: Body text
+        title_font_size: Title font size in hundredths of a point
+        body_font_size: Body font size in hundredths of a point
+        category: Layout category name (used to look up cookbook recipe)
+        use_cookbook: Force cookbook mode (skip placeholder attempt)
+
+    Returns:
+        The modified XML tree
+    """
+    tree = etree.parse(str(slide_path))
+    root = tree.getroot()
+
+    if not use_cookbook:
+        # Try standard placeholder-based replacement
+        title_shape = find_placeholder(root, 'title')
+        body_shape = find_placeholder(root, 'body')
+        if body_shape is None:
+            body_shape = find_placeholder(root, 'body', idx='1')
+
+        title_ok = title_shape is not None or not new_title
+        body_ok = body_shape is not None or not new_body
+
+        if title_ok and body_ok:
+            # Standard path works
+            return replace_text_in_slide(slide_path, new_title, new_body, title_font_size, body_font_size)
+
+    # Fallback: use cookbook recipe
+    try:
+        from .cookbook import get_recipe, apply_recipe_to_slide
+
+        recipe = get_recipe(category)
+        if recipe is None:
+            recipe = get_recipe("feature_default")
+
+        if recipe is not None:
+            apply_recipe_to_slide(root, recipe, new_title, new_body)
+            return tree
+    except ImportError:
+        pass
+
+    # Ultimate fallback: standard text replacement (best effort)
+    return replace_text_in_slide(slide_path, new_title, new_body, title_font_size, body_font_size)
+
+
+# ============================================================
 # MIGRATION ENGINE
 # ============================================================
 
@@ -981,7 +1051,9 @@ def migrate_presentation(
     output_path: Union[str, Path],
     config: BrandConfig,
     template_path: Union[str, Path],
-    insert_images: bool = True
+    insert_images: bool = True,
+    diagnose: bool = False,
+    use_cookbook: bool = False,
 ) -> Path:
     """Create migrated presentation from slides data with intelligent layout selection.
 
@@ -991,6 +1063,8 @@ def migrate_presentation(
         config: Brand configuration
         template_path: Path to template PPTX
         insert_images: Whether to insert extracted images into slides
+        diagnose: If True, run template diagnostics before migration (prints warnings, never blocks)
+        use_cookbook: If True, force cookbook mode for all slides (skip template placeholders)
 
     Returns:
         Path to created presentation
@@ -1000,6 +1074,16 @@ def migrate_presentation(
 
     if not template_path.exists():
         raise FileNotFoundError(f"Template not found: {template_path}")
+
+    # Optional pre-flight diagnostics
+    if diagnose:
+        try:
+            from .diagnose import diagnose_template
+            report = diagnose_template(template_path, config)
+            if report.issues:
+                report.print_report()
+        except Exception as e:
+            print(f"  Diagnostics skipped: {e}")
 
     print(f"\nMigrating {len(slides)} slides...")
     print(f"Template: {template_path}")
@@ -1059,10 +1143,33 @@ def migrate_presentation(
             body_pt = capacity.body_font_size
 
             if content_type == 'stats_dashboard' and category == 'stats_dashboard':
-                tree = populate_stats_dashboard(dst_slide, slide['title'], slide['body'])
+                # Use pre-parsed zones if available
+                zones = slide.get('_zones')
+                if zones and zones.get('type') == 'stats_dashboard':
+                    tree = etree.parse(str(dst_slide))
+                    root = tree.getroot()
+                    replace_text_in_placeholder(root, 'title', slide['title'], 3600)
+                    for i, stat in enumerate(zones.get('stats', [])[:6], 1):
+                        replace_text_in_named_shape(root, f'Stat{i}_Number', stat['number'], 7200)
+                        replace_text_in_named_shape(root, f'Stat{i}_Label', stat['label'], 1800)
+                else:
+                    tree = populate_stats_dashboard(dst_slide, slide['title'], slide['body'])
                 tree.write(str(dst_slide), xml_declaration=True, encoding='UTF-8', standalone=True)
             elif content_type == 'case_study_full' and category == 'case_study_full':
-                tree = populate_case_study_full(dst_slide, slide['title'], slide['body'])
+                # Use pre-parsed zones if available
+                zones = slide.get('_zones')
+                if zones and zones.get('type') == 'case_study_full':
+                    tree = etree.parse(str(dst_slide))
+                    root = tree.getroot()
+                    replace_text_in_placeholder(root, 'title', zones.get('company_name', slide['title']), 3600)
+                    replace_text_in_placeholder(root, 'body', zones.get('description', ''), 1600, idx='1')
+                    replace_text_in_placeholder(root, 'body', zones.get('bullets', ''), 1400, idx='2')
+                    if zones.get('quote'):
+                        replace_text_in_named_shape(root, 'Quote', f'"{zones["quote"]}"', 2400)
+                    if zones.get('attribution'):
+                        replace_text_in_named_shape(root, 'Attribution', zones['attribution'], 1400)
+                else:
+                    tree = populate_case_study_full(dst_slide, slide['title'], slide['body'])
                 tree.write(str(dst_slide), xml_declaration=True, encoding='UTF-8', standalone=True)
             else:
                 new_title = slide['title'].replace('\n', ' ')[:title_max]
@@ -1071,7 +1178,10 @@ def migrate_presentation(
                 if len(slide['body']) > body_max:
                     body_pt = max(1200, body_pt - 200)
 
-                tree = replace_text_in_slide(dst_slide, new_title, new_body, title_pt, body_pt)
+                tree = populate_slide_with_fallback(
+                    dst_slide, new_title, new_body, title_pt, body_pt,
+                    category=category, use_cookbook=use_cookbook,
+                )
                 tree.write(str(dst_slide), xml_declaration=True, encoding='UTF-8', standalone=True)
 
             slide_images = slide.get('images', [])
@@ -1207,3 +1317,53 @@ def update_package_structure(output_dir: Path, num_slides: int) -> None:
             sld_id.set(f'{{{NSMAP["r"]}}}id', f'rId{max_rid + i}')
 
     pres_tree.write(str(pres_path), xml_declaration=True, encoding='UTF-8', standalone=True)
+
+
+# ============================================================
+# CONVENIENCE WRAPPERS
+# ============================================================
+
+def migrate_from_content(
+    content: Union[str, Path, "ContentDocument"],
+    output_path: Union[str, Path],
+    config: BrandConfig,
+    template_path: Union[str, Path],
+    insert_images: bool = True,
+    diagnose: bool = False,
+    use_cookbook: bool = False,
+) -> Path:
+    """Migrate directly from a ContentDocument or content.json file.
+
+    This is a convenience wrapper around migrate_presentation() that
+    handles loading and converting content documents.
+
+    Args:
+        content: ContentDocument instance or path to content.json
+        output_path: Path for output PPTX file
+        config: Brand configuration
+        template_path: Path to template PPTX
+        insert_images: Whether to insert extracted images into slides
+        diagnose: If True, run template diagnostics before migration
+        use_cookbook: If True, force cookbook mode for all slides
+
+    Returns:
+        Path to created presentation
+    """
+    from .content import ContentDocument, load_content_document, content_document_to_slides
+
+    if isinstance(content, (str, Path)):
+        doc = load_content_document(content)
+    else:
+        doc = content
+
+    slides = content_document_to_slides(doc)
+
+    return migrate_presentation(
+        slides,
+        output_path,
+        config,
+        template_path,
+        insert_images=insert_images,
+        diagnose=diagnose,
+        use_cookbook=use_cookbook,
+    )

@@ -16,6 +16,7 @@ from .config import (
 
 from .migrate import (
     migrate_presentation,
+    migrate_from_content,
     detect_and_parse,
     detect_content_type,
     LayoutSelector,
@@ -30,6 +31,28 @@ from .extract import (
     extract_pptx_to_markdown,
 )
 
+from .content import (
+    ContentDocument,
+    SlideContent,
+    ContentType,
+    slides_to_content_document,
+    content_document_to_slides,
+    load_content_document,
+    save_content_document,
+)
+
+from .cookbook import (
+    LayoutRecipe,
+    COOKBOOK,
+    get_recipe,
+    list_recipes,
+)
+
+from .diagnose import (
+    diagnose_template,
+    DiagnosticReport,
+)
+
 __all__ = [
     # Config
     'BrandConfig',
@@ -38,6 +61,7 @@ __all__ = [
     'create_minimal_config',
     # Migration
     'migrate_presentation',
+    'migrate_from_content',
     'detect_and_parse',
     'detect_content_type',
     'LayoutSelector',
@@ -46,4 +70,20 @@ __all__ = [
     'get_analysis_json',
     # Extraction
     'extract_pptx_to_markdown',
+    # Content Document
+    'ContentDocument',
+    'SlideContent',
+    'ContentType',
+    'slides_to_content_document',
+    'content_document_to_slides',
+    'load_content_document',
+    'save_content_document',
+    # Cookbook
+    'LayoutRecipe',
+    'COOKBOOK',
+    'get_recipe',
+    'list_recipes',
+    # Diagnostics
+    'diagnose_template',
+    'DiagnosticReport',
 ]

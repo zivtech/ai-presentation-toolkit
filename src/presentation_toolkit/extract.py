@@ -59,6 +59,100 @@ def get_slide_images(rels_content: bytes) -> List[str]:
     return images
 
 
+def _extract_slides_data(pptx_path: Path) -> tuple:
+    """Extract raw slide data and image mappings from a PPTX file.
+
+    This is the shared extraction logic used by both markdown and content JSON output.
+
+    Args:
+        pptx_path: Path to source PPTX
+
+    Returns:
+        Tuple of (slides_data, image_mapping, work_dir_path)
+        Caller must clean up work_dir_path if it's a temp directory.
+    """
+    work_dir = Path(tempfile.mkdtemp())
+
+    with zipfile.ZipFile(pptx_path, 'r') as zf:
+        zf.extractall(work_dir)
+
+    slides_dir = work_dir / 'ppt/slides'
+    rels_dir = slides_dir / '_rels'
+
+    # Build layout name map from slideLayouts
+    layout_map = {}
+    layouts_dir = work_dir / 'ppt/slideLayouts'
+    if layouts_dir.exists():
+        for layout_file in layouts_dir.glob('slideLayout*.xml'):
+            num = int(re.search(r'slideLayout(\d+)', layout_file.name).group(1))
+            tree = etree.parse(str(layout_file))
+            root = tree.getroot()
+
+            name_attr = root.get('matchingName') or root.get('name')
+            if name_attr:
+                name = name_attr.upper().replace(' ', '_').replace('-', '_')
+                name = re.sub(r'[^A-Z0-9_]', '', name)
+                layout_map[num] = name
+            else:
+                layout_map[num] = f"LAYOUT_{num}"
+
+    # Get all slide files sorted by number
+    slide_files = sorted(
+        [f for f in slides_dir.glob('slide*.xml') if f.is_file()],
+        key=lambda x: int(re.search(r'slide(\d+)', x.name).group(1))
+    )
+
+    slides_data = []
+    image_mapping = {}
+
+    for slide_file in slide_files:
+        num = int(re.search(r'slide(\d+)', slide_file.name).group(1))
+
+        tree = etree.parse(str(slide_file))
+        root = tree.getroot()
+
+        rels_file = rels_dir / f'slide{num}.xml.rels'
+        layout = "DEFAULT"
+        images = []
+
+        if rels_file.exists():
+            with open(rels_file, 'rb') as f:
+                rels_content = f.read()
+                layout = get_layout_name(rels_content, layout_map)
+                images = get_slide_images(rels_content)
+
+        if images:
+            image_mapping[num] = images
+
+        # Extract all text
+        texts = []
+        for t in root.xpath('.//a:t', namespaces=NSMAP):
+            if t.text:
+                texts.append(clean_text(t.text))
+
+        # Deduplicate adjacent identical texts
+        unique_texts = []
+        prev = None
+        for t in texts:
+            if t != prev and t:
+                unique_texts.append(t)
+                prev = t
+
+        title = unique_texts[0] if unique_texts else ""
+        body = '\n'.join(unique_texts[1:]) if len(unique_texts) > 1 else ""
+
+        slides_data.append({
+            'number': num,
+            'layout': layout,
+            'title': title,
+            'body': body,
+            'images': images,
+            'image_count': len(images),
+        })
+
+    return slides_data, image_mapping, work_dir
+
+
 def extract_pptx_to_markdown(
     pptx_path: Union[str, Path],
     output_path: Optional[Union[str, Path]] = None,
@@ -83,86 +177,9 @@ def extract_pptx_to_markdown(
 
     print(f"Extracting: {pptx_path.name}")
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        work_dir = Path(tmpdir)
+    slides_data, image_mapping, work_dir = _extract_slides_data(pptx_path)
 
-        with zipfile.ZipFile(pptx_path, 'r') as zf:
-            zf.extractall(work_dir)
-
-        slides_dir = work_dir / 'ppt/slides'
-        rels_dir = slides_dir / '_rels'
-
-        # Build layout name map from slideLayouts
-        layout_map = {}
-        layouts_dir = work_dir / 'ppt/slideLayouts'
-        if layouts_dir.exists():
-            for layout_file in layouts_dir.glob('slideLayout*.xml'):
-                num = int(re.search(r'slideLayout(\d+)', layout_file.name).group(1))
-                tree = etree.parse(str(layout_file))
-                root = tree.getroot()
-
-                name_attr = root.get('matchingName') or root.get('name')
-                if name_attr:
-                    name = name_attr.upper().replace(' ', '_').replace('-', '_')
-                    name = re.sub(r'[^A-Z0-9_]', '', name)
-                    layout_map[num] = name
-                else:
-                    layout_map[num] = f"LAYOUT_{num}"
-
-        # Get all slide files sorted by number
-        slide_files = sorted(
-            [f for f in slides_dir.glob('slide*.xml') if f.is_file()],
-            key=lambda x: int(re.search(r'slide(\d+)', x.name).group(1))
-        )
-
-        slides_data = []
-        image_mapping = {}
-
-        for slide_file in slide_files:
-            num = int(re.search(r'slide(\d+)', slide_file.name).group(1))
-
-            tree = etree.parse(str(slide_file))
-            root = tree.getroot()
-
-            rels_file = rels_dir / f'slide{num}.xml.rels'
-            layout = "DEFAULT"
-            images = []
-
-            if rels_file.exists():
-                with open(rels_file, 'rb') as f:
-                    rels_content = f.read()
-                    layout = get_layout_name(rels_content, layout_map)
-                    images = get_slide_images(rels_content)
-
-            if images:
-                image_mapping[num] = images
-
-            # Extract all text
-            texts = []
-            for t in root.xpath('.//a:t', namespaces=NSMAP):
-                if t.text:
-                    texts.append(clean_text(t.text))
-
-            # Deduplicate adjacent identical texts
-            unique_texts = []
-            prev = None
-            for t in texts:
-                if t != prev and t:
-                    unique_texts.append(t)
-                    prev = t
-
-            title = unique_texts[0] if unique_texts else ""
-            body = '\n'.join(unique_texts[1:]) if len(unique_texts) > 1 else ""
-
-            slides_data.append({
-                'number': num,
-                'layout': layout,
-                'title': title,
-                'body': body,
-                'images': images,
-                'image_count': len(images),
-            })
-
+    try:
         # Extract images if requested
         images_dir = None
         if extract_images:
@@ -186,6 +203,8 @@ def extract_pptx_to_markdown(
                     'slides_with_images': len(image_mapping),
                 }, f, indent=2)
             print(f"Created image mapping: {mapping_file.name}")
+    finally:
+        shutil.rmtree(work_dir)
 
     # Generate markdown
     md_content = generate_markdown(slides_data, pptx_path.name)
@@ -198,6 +217,44 @@ def extract_pptx_to_markdown(
     print(f"Slides with images: {len(image_mapping)}")
 
     return slides_data
+
+
+def extract_pptx_to_content_json(
+    pptx_path: Union[str, Path],
+    output_path: Union[str, Path],
+    extract_images: bool = False,
+) -> "ContentDocument":
+    """Extract PPTX content to a ContentDocument JSON file.
+
+    Args:
+        pptx_path: Path to source PPTX
+        output_path: Path for output content.json
+        extract_images: If True, also extract images alongside
+
+    Returns:
+        The ContentDocument instance
+    """
+    from .content import slides_to_content_document, save_content_document
+
+    pptx_path = Path(pptx_path)
+    output_path = Path(output_path)
+
+    print(f"Extracting to content JSON: {pptx_path.name}")
+
+    slides_data, image_mapping, work_dir = _extract_slides_data(pptx_path)
+    shutil.rmtree(work_dir)
+
+    doc = slides_to_content_document(
+        slides_data,
+        source_file=pptx_path.name,
+        source_format="pptx",
+    )
+
+    save_content_document(doc, output_path)
+    print(f"Created: {output_path}")
+    print(f"Slides: {len(slides_data)}")
+
+    return doc
 
 
 def generate_markdown(slides_data: List[Dict[str, Any]], source_name: str) -> str:

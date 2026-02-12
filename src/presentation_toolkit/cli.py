@@ -5,6 +5,7 @@ Provides entry points for:
 - pptx-migrate: Migrate presentations to branded templates
 - pptx-analyze: Analyze brand compliance
 - pptx-extract: Extract content from presentations
+- pptx-diagnose: Run template diagnostics
 """
 
 import sys
@@ -16,7 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 from .config import load_config, BrandConfig
-from .migrate import migrate_presentation, detect_and_parse
+from .migrate import migrate_presentation, migrate_from_content, detect_and_parse
 from .analyze import analyze_presentation, get_analysis_json
 from .extract import extract_pptx_to_markdown
 
@@ -41,6 +42,22 @@ def migrate_command(args: argparse.Namespace) -> int:
             return 1
 
     try:
+        from_content = getattr(args, 'from_content', None)
+
+        if from_content:
+            # Skip parsing — use pre-built content.json
+            print(f"Loading content from: {from_content}")
+            migrate_from_content(
+                from_content,
+                args.output,
+                config,
+                template_path,
+                insert_images=not args.no_images,
+                diagnose=True,
+                use_cookbook=getattr(args, 'use_cookbook', False),
+            )
+            return 0
+
         # Create temp directory for extracted images
         image_dir = None
         if not args.no_images:
@@ -58,13 +75,25 @@ def migrate_command(args: argparse.Namespace) -> int:
         if slides_with_images > 0:
             print(f"  {slides_with_images} slides have extractable images")
 
+        # Optionally save intermediate content.json
+        save_content = getattr(args, 'save_content', None)
+        if save_content:
+            from .content import slides_to_content_document, save_content_document
+            source_file = str(Path(args.input).name)
+            source_format = Path(args.input).suffix.lstrip('.')
+            doc = slides_to_content_document(slides, source_file, source_format)
+            save_content_document(doc, save_content)
+            print(f"Saved intermediate content to: {save_content}")
+
         # Migrate
         migrate_presentation(
             slides,
             args.output,
             config,
             template_path,
-            insert_images=not args.no_images
+            insert_images=not args.no_images,
+            diagnose=True,
+            use_cookbook=getattr(args, 'use_cookbook', False),
         )
 
         # Cleanup temp image directory
@@ -142,6 +171,35 @@ def extract_command(args: argparse.Namespace) -> int:
         return 1
 
 
+def diagnose_command(args: argparse.Namespace) -> int:
+    """Execute diagnose command."""
+    from .diagnose import diagnose_template
+
+    config = None
+    if args.config:
+        config = load_config(args.config)
+
+    try:
+        report = diagnose_template(args.template, config=config)
+
+        if getattr(args, 'json', False):
+            print(json.dumps(report.to_dict(), indent=2))
+        else:
+            report.print_report()
+
+        if args.strict and report.has_blocking_issues:
+            return 1
+
+        return 0
+
+    except Exception as e:
+        print(f"\nError: {e}")
+        if getattr(args, 'verbose', False):
+            import traceback
+            traceback.print_exc()
+        return 1
+
+
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -150,8 +208,10 @@ def main():
         epilog="""
 Examples:
   %(prog)s migrate input.pptx output.pptx --config brand.yaml
+  %(prog)s migrate --from-content content.json output.pptx --config brand.yaml
   %(prog)s analyze deck.pptx --config brand.yaml --json
   %(prog)s extract input.pptx --output content.md --images
+  %(prog)s diagnose template.pptx --config brand.yaml
         """
     )
 
@@ -161,11 +221,14 @@ Examples:
 
     # Migrate command
     migrate_parser = subparsers.add_parser('migrate', help='Migrate presentation to branded template')
-    migrate_parser.add_argument('input', help='Input file (PPTX, PDF, MD, or CSV)')
+    migrate_parser.add_argument('input', nargs='?', help='Input file (PPTX, PDF, MD, or CSV)')
     migrate_parser.add_argument('output', help='Output PPTX file')
     migrate_parser.add_argument('--config', '-c', required=True, help='Brand configuration file (YAML/JSON)')
     migrate_parser.add_argument('--template', '-t', help='Template PPTX (overrides config)')
     migrate_parser.add_argument('--no-images', action='store_true', help='Skip image extraction/insertion')
+    migrate_parser.add_argument('--save-content', metavar='PATH', help='Save intermediate content.json before migration')
+    migrate_parser.add_argument('--from-content', metavar='PATH', help='Skip parsing, use pre-built content.json')
+    migrate_parser.add_argument('--use-cookbook', action='store_true', help='Force cookbook mode (absolute positioning, no template placeholders)')
     migrate_parser.add_argument('-v', '--verbose', action='store_true', help='Show detailed output')
 
     # Analyze command
@@ -183,6 +246,14 @@ Examples:
     extract_parser.add_argument('--images', action='store_true', help='Also extract images')
     extract_parser.add_argument('-v', '--verbose', action='store_true', help='Show detailed output')
 
+    # Diagnose command
+    diagnose_parser = subparsers.add_parser('diagnose', help='Run template diagnostics')
+    diagnose_parser.add_argument('template', help='Template PPTX file to diagnose')
+    diagnose_parser.add_argument('--config', '-c', help='Brand configuration file (YAML/JSON)')
+    diagnose_parser.add_argument('--strict', action='store_true', help='Exit with error if blocking issues found')
+    diagnose_parser.add_argument('--json', action='store_true', help='Output results as JSON')
+    diagnose_parser.add_argument('-v', '--verbose', action='store_true', help='Show detailed output')
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -195,6 +266,8 @@ Examples:
         return analyze_command(args)
     elif args.command == 'extract':
         return extract_command(args)
+    elif args.command == 'diagnose':
+        return diagnose_command(args)
     else:
         parser.print_help()
         return 1
@@ -216,6 +289,12 @@ def pptx_analyze():
 def pptx_extract():
     """Entry point for pptx-extract command."""
     sys.argv = ['pptx-extract', 'extract'] + sys.argv[1:]
+    return main()
+
+
+def pptx_diagnose():
+    """Entry point for pptx-diagnose command."""
+    sys.argv = ['pptx-diagnose', 'diagnose'] + sys.argv[1:]
     return main()
 
 
