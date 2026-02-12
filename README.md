@@ -1,4 +1,4 @@
-# Claude Presentation Toolkit
+# AI Presentation Toolkit
 
 A generic, brand-agnostic toolkit for migrating PowerPoint presentations to branded templates. Supports intelligent content-type detection, layout variety tracking, and brand compliance analysis.
 

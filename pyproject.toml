@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "claude-presentation-toolkit"
+name = "ai-presentation-toolkit"
 version = "0.1.0"
 description = "A generic toolkit for migrating PowerPoint presentations to branded templates"
 readme = "README.md"
@@ -50,9 +50,9 @@ pptx-extract = "presentation_toolkit.cli:pptx_extract"
 presentation-toolkit = "presentation_toolkit.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/zivtech/claude-presentation-toolkit"
-Repository = "https://github.com/zivtech/claude-presentation-toolkit"
-Issues = "https://github.com/zivtech/claude-presentation-toolkit/issues"
+Homepage = "https://github.com/zivtech/ai-presentation-toolkit"
+Repository = "https://github.com/zivtech/ai-presentation-toolkit"
+Issues = "https://github.com/zivtech/ai-presentation-toolkit/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
