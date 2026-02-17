@@ -342,6 +342,38 @@ if report.has_blocking_issues:
     print("Fix template before migration!")
 ```
 
+## Lessons Learned: HTML Slide Generation
+
+When generating presentations as HTML slides (e.g., using Manus slide tools or similar HTML-based renderers), the following hard-won lessons apply:
+
+### Slide Rendering in Iframes
+
+- **CSS transform scaling is essential.** When embedding 1280x720 slide content in a responsive iframe, use `transform: scale()` with a `ResizeObserver` to dynamically scale the iframe to fit its container. Setting `width=device-width` in the viewport meta tag alone is unreliable.
+- **Set `transform-origin: top left`** on the iframe and calculate `scale = containerWidth / 1280`. Wrap the iframe in an `overflow: hidden` container sized to `containerWidth x (containerWidth * 9/16)`.
+- **Use `height: 720px !important`** on `.slide-container` to override inline `min-height: 720px` styles that cause white-space gaps at the bottom of slides.
+
+### GUI Block Image Handling
+
+- **Never use `background-size: 100% 100%`** on GUI block images. This stretches rounded-corner frames and decorative elements. Use `object-fit: contain` on `<img>` tags or `background-size: contain` for background images.
+- **For text inside GUI blocks**, use `position: relative` on the container with the GUI block as an `<img>`, then overlay text with `position: absolute` and percentage-based insets (e.g., `top: 10%; left: 8%; right: 8%; bottom: 12%`). This keeps text within the visible rounded-rectangle area.
+- **Never leave GUI blocks empty** in side-by-side layouts. Always place a photo, text, or branded content inside the frame.
+
+### Split-Panel Color Slides
+
+- **Alternate color placement** (left vs. right) across consecutive split-panel slides for visual variety.
+- **Use different brand colors** for each split-panel slide rather than repeating the same color. Rotate through the full palette (e.g., cyan, navy, yellow, orange).
+- **Set `min-height: 720px`** on the colored panel div to ensure it fills the full slide height.
+
+### PDF Generation from HTML Slides
+
+- Use Playwright with a 1280x720 viewport and `device_scale_factor=2` for high-resolution captures.
+- Wait for `networkidle` plus a short delay (500ms) to ensure images and fonts load before screenshotting.
+- Compile screenshots into PDF using `fpdf2` with landscape orientation.
+
+## Example Output
+
+See the [drupal-brand-skill](https://github.com/zivtech/drupal-brand-skill) repository for an example 88-slide Drupal pitch deck PDF generated using these techniques.
+
 ## License
 
 MIT
